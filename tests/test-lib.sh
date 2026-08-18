@@ -18,17 +18,22 @@ write_atomic "$SANDBOX/f" "hello"
 assert_eq "$(cat "$SANDBOX/f")" "hello"
 assert_fail test -e "$SANDBOX/f.tmp"
 
-# state_config: global value, workdir overlay, missing key
+# state_config: global value, workdir overlay, missing key.
+# Values are set explicitly so the checks never couple to whatever the
+# local config.json currently says (the settings UI edits it live).
 repo=$(make_repo libcfg)
-assert_eq "$(state_config "$repo" requirements model)" "claude-opus-5"
+set_state_cfg requirements model '"model-from-global"'
+assert_eq "$(state_config "$repo" requirements model)" "model-from-global"
 mkdir -p "$repo/.nightcrew"
-echo '{"states":{"requirements":{"model":"claude-sonnet-5"}}}' > "$repo/.nightcrew/config.json"
-assert_eq "$(state_config "$repo" requirements model)" "claude-sonnet-5"
-assert_eq "$(state_config "$repo" requirements max_turns)" "25"
+echo '{"states":{"requirements":{"model":"model-from-workdir"}}}' > "$repo/.nightcrew/config.json"
+assert_eq "$(state_config "$repo" requirements model)" "model-from-workdir"
+set_state_cfg requirements max_turns 41
+assert_eq "$(state_config "$repo" requirements max_turns)" "41"
 assert_fail state_config "$repo" requirements no_such_key
 
 # global_config: value and default
-assert_eq "$(global_config max_concurrent)" "3"
+set_global max_concurrent 7
+assert_eq "$(global_config max_concurrent)" "7"
 assert_eq "$(global_config nope 9)" "9"
 
 # resolve_ticket / ticket_workdir

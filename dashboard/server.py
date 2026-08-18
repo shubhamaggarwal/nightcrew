@@ -534,11 +534,17 @@ def settings_page(error=""):
     return page("Settings", "".join(h))
 
 
+def unix_text(s):
+    """Browsers submit textarea content with CRLF line endings; the engine's
+    line-oriented greps (OUTPUT FILE:, VERDICT:) need clean LF."""
+    return s.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def save_settings(state, form):
     """Returns an error string, or '' on success. Atomic writes only."""
     model = form.get("model", "").strip()
     tools = form.get("allowed_tools", "").strip()
-    ptext = form.get("prompt_text", "")
+    ptext = unix_text(form.get("prompt_text", ""))
     if not model:
         return "model must not be empty"
     if not ptext.strip():
@@ -638,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
                                             "editable while awaiting approval.</p>"))
             dest = os.path.join(t["dir"], "requirements.md")
             with open(dest + ".tmp", "w") as f:
-                f.write(self._form().get("content", ""))
+                f.write(unix_text(self._form().get("content", "")))
             os.replace(dest + ".tmp", dest)
             return self._redirect("/ticket/%s?tab=requirements.md" % t["id"])
         m = re.match(r"^/(approve|retry)/(T-\d+)$", path)
