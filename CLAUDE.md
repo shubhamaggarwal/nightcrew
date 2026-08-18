@@ -45,7 +45,7 @@ state a fresh bounded `claude -p` session.
 - Enable repo hooks once per clone: `git config core.hooksPath .githooks`
   (they chain to any global hooks dir). gitleaks must be installed; pre-push
   refuses to push without it, and CI runs it on every push and PR.
-- Work on a branch/worktree, never directly on main. Run the full suite
+- Work on a branch/worktree, never directly on master. Run the full suite
   before merging.
 
 ## Where things are
