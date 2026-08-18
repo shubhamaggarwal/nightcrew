@@ -17,7 +17,9 @@ from urllib.parse import parse_qs
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.path.join(ROOT, "bin")
 LLM_STATES = ["requirements", "planning", "executing", "verifying"]
-MODELS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]
+MODELS = ["claude-opus-5", "claude-opus-5[1m]",
+          "claude-sonnet-5", "claude-sonnet-5[1m]",
+          "claude-haiku-4-5-20251001"]
 COLUMNS = [
     ("Queue", ["new", "requirements"]),
     ("Needs you", ["awaiting-approval"]),
