@@ -78,6 +78,10 @@ main{padding:22px 24px;max-width:1280px;margin:0 auto}
 .b-wait::before{background:#8ab6ff}
 .meta{font:11px ui-monospace,Menlo,monospace;color:#6f7aa3;margin-top:8px}
 .meta a{color:#8ab6ff}
+.prog{height:4px;background:#1d2540;border-radius:999px;margin-top:10px;overflow:hidden;max-width:680px}
+.prog-bar{height:100%;background:linear-gradient(90deg,#b98829,#e8b34b);border-radius:999px;
+  transition:width .6s ease;animation:ncpulse 1.6s ease-in-out infinite}
+.prog-meta{color:#e8b34b;margin-top:5px}
 .warn{background:rgba(232,179,75,.08);border:1px solid rgba(232,179,75,.35);color:#ecd9a8;
   border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px}
 .err{color:#ff7a7a;font-size:13px}
@@ -189,6 +193,75 @@ def tickets():
     return out
 
 
+def state_cfg(workdir, state, key, default=None):
+    """Per-state config value: the workdir's .nightcrew/config.json override
+    wins over the global config, mirroring bin/lib.sh state_config."""
+    try:
+        with open(os.path.join(workdir, ".nightcrew", "config.json"),
+                  errors="replace") as f:
+            v = json.load(f).get("states", {}).get(state, {}).get(key)
+        if v is not None:
+            return v
+    except (OSError, ValueError):
+        pass
+    return load_config().get("states", {}).get(state, {}).get(key, default)
+
+
+def session_progress(t):
+    """Live progress for a running session, or None.
+
+    Derived purely from files: the mkdir .lock proves a run-state owns the
+    ticket right now, and the newest stream-json log gives an approximate
+    turn count (assistant events) plus elapsed wall time."""
+    if t["state"] not in LLM_STATES:
+        return None
+    if not os.path.isdir(os.path.join(t["dir"], ".lock")):
+        return None
+    logdir = os.path.join(t["dir"], "logs")
+    prefix = t["state"] + "-"
+    try:
+        nums = [int(m.group(1)) for m in
+                (re.match(r"%s(\d+)\.log$" % re.escape(prefix), n)
+                 for n in os.listdir(logdir))
+                if m]
+    except OSError:
+        return None
+    if not nums:
+        return None
+    path = os.path.join(logdir, "%s%d.log" % (prefix, max(nums)))
+    turns = 0
+    try:
+        st = os.stat(path)
+        with open(path, errors="replace") as f:
+            for line in f:
+                if '"type":"assistant"' in line:
+                    turns += 1
+    except OSError:
+        return None
+    start = getattr(st, "st_birthtime", st.st_mtime)
+    elapsed = max(0, int(time.time() - start))
+    max_turns = int(state_cfg(t["workdir"], t["state"], "max_turns", 0) or 0)
+    if max_turns:
+        turns = min(turns, max_turns)
+        pct = min(100, 100 * turns // max_turns)
+    else:
+        pct = 0
+    return {"turns": turns, "max_turns": max_turns,
+            "elapsed": elapsed, "pct": pct}
+
+
+def progress_html(t):
+    p = session_progress(t)
+    if p is None:
+        return ""
+    mins, secs = divmod(p["elapsed"], 60)
+    turns = ("turn ~%d/%d" % (p["turns"], p["max_turns"])
+             if p["max_turns"] else "turn ~%d" % p["turns"])
+    return ("<div class='prog'><div class='prog-bar' style='width:%d%%'></div></div>"
+            "<div class='meta prog-meta'>working &middot; %s &middot; %dm%02ds elapsed</div>"
+            % (max(p["pct"], 4), turns, mins, secs))
+
+
 def find_ticket(tid):
     for t in tickets():
         if t["id"] == tid:
@@ -228,9 +301,12 @@ def card(t):
         h.append("<span class='badge b-fail'>%s</span>" % html.escape(label))
     else:
         h.append(badge(t["state"]))
+    h.append(progress_html(t))
     h.append("<div class='meta'>%s · %s</div>"
              % (html.escape(os.path.basename(t["workdir"])), t["age"]))
     if t["state"] == "awaiting-approval":
+        h.append("<div class='meta'><a href='/ticket/%s?tab=requirements.md'>"
+                 "Review requirements</a></div>" % t["id"])
         h.append("<form class='inline' method='post' action='/approve/%s'>"
                  "<button class='pri'>Approve</button></form>" % t["id"])
     if t["state"] == "failed":
@@ -272,6 +348,7 @@ def detail(tid, tab):
          "<span class='meta'>%s</span></p>"
          % (html.escape(tid), html.escape(t["title"]), badge(t["state"]),
             html.escape(t["workdir"]))]
+    h.append(progress_html(t))
     if t["state"] == "awaiting-approval":
         h.append("<form class='inline' method='post' action='/approve/%s'>"
                  "<button class='pri'>Approve</button></form> " % tid)
@@ -296,9 +373,18 @@ def detail(tid, tab):
     elif tab:
         p = os.path.join(t["dir"], tab)
         with open(p, errors="replace") as f:
+            content = f.read()
+        if t["state"] == "awaiting-approval" and tab == "requirements.md":
+            h.append("<p class='path'>%s &middot; editable while awaiting your "
+                     "approval</p>"
+                     "<form method='post' action='/edit/%s/requirements.md'>"
+                     "<textarea name='content' rows='24'>%s</textarea><br>"
+                     "<button>Save changes</button></form>"
+                     % (html.escape(p), tid, html.escape(content)))
+        else:
             h.append("<p class='path'>%s</p><pre>%s</pre>"
-                     % (html.escape(p), html.escape(f.read())))
-    return page(tid, "".join(h))
+                     % (html.escape(p), html.escape(content)))
+    return page(tid, "".join(h), refresh=session_progress(t) is not None)
 
 
 def browse(path):
@@ -536,6 +622,20 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 return self._send(400, settings_page(error=err))
             return self._redirect("/settings")
+        m = re.match(r"^/edit/(T-\d+)/requirements\.md$", path)
+        if m:
+            t = find_ticket(m.group(1))
+            if t is None:
+                return self._send(404, page("Not found", "<p>Unknown ticket.</p>"))
+            if t["state"] != "awaiting-approval":
+                return self._send(409, page("Rejected",
+                                            "<p class='err'>Requirements are only "
+                                            "editable while awaiting approval.</p>"))
+            dest = os.path.join(t["dir"], "requirements.md")
+            with open(dest + ".tmp", "w") as f:
+                f.write(self._form().get("content", ""))
+            os.replace(dest + ".tmp", dest)
+            return self._redirect("/ticket/%s?tab=requirements.md" % t["id"])
         m = re.match(r"^/(approve|retry)/(T-\d+)$", path)
         if m:
             rc, out = run_bin([os.path.join(BIN, "transition.sh"),

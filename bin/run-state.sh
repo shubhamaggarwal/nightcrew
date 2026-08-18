@@ -63,15 +63,18 @@ run_session() {
   prompt=$(render_prompt "$tmpl")
   logf=$(next_log)
   secs=$(awk "BEGIN{print int($mins * 60)}")
+  # stream-json (one JSON event per line) lets the dashboard read live
+  # progress out of the log while the session runs; --verbose is required
+  # by claude -p for this format.
   if [ "$tools" = "*" ]; then
     # "*" grants every tool: omit --allowedTools entirely.
     ( cd "$cwd" && run_with_timeout "$secs" \
         "$CLAUDE_BIN" -p "$prompt" --model "$model" --max-turns "$turns" \
-        --output-format json ) >> "$logf" 2>&1
+        --output-format stream-json --verbose ) >> "$logf" 2>&1
   else
     ( cd "$cwd" && run_with_timeout "$secs" \
         "$CLAUDE_BIN" -p "$prompt" --model "$model" --max-turns "$turns" \
-        --allowedTools "$tools" --output-format json ) >> "$logf" 2>&1
+        --allowedTools "$tools" --output-format stream-json --verbose ) >> "$logf" 2>&1
   fi
 }
 
