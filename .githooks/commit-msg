@@ -1,0 +1,10 @@
+#!/bin/sh
+# Repo-local hooksPath replaces any global hooks dir, so chain to the
+# globally-configured hook of the same name (commit format enforcement).
+
+gdir=$(git config --global core.hooksPath 2>/dev/null || true)
+self=$(basename "$0")
+if [ -n "$gdir" ] && [ -x "$gdir/$self" ]; then
+  exec "$gdir/$self" "$@"
+fi
+exit 0

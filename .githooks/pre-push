@@ -1,0 +1,20 @@
+#!/bin/sh
+# Scan the full local history for secrets before anything leaves the machine.
+# Chains to any globally-configured hook of the same name first.
+
+gdir=$(git config --global core.hooksPath 2>/dev/null || true)
+self=$(basename "$0")
+if [ -n "$gdir" ] && [ -x "$gdir/$self" ]; then
+  "$gdir/$self" "$@" || exit $?
+fi
+
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --no-banner --redact || {
+    echo "pre-push: gitleaks found a potential secret in history; push blocked" >&2
+    exit 1
+  }
+else
+  echo "pre-push: gitleaks not installed; refusing to push unscanned history" >&2
+  echo "install it with: brew install gitleaks" >&2
+  exit 1
+fi

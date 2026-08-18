@@ -1,0 +1,18 @@
+#!/bin/sh
+# Block commits that stage a secret. Requires gitleaks (brew install gitleaks).
+# Chains to any globally-configured hook of the same name first.
+
+gdir=$(git config --global core.hooksPath 2>/dev/null || true)
+self=$(basename "$0")
+if [ -n "$gdir" ] && [ -x "$gdir/$self" ]; then
+  "$gdir/$self" "$@" || exit $?
+fi
+
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --pre-commit --staged --no-banner --redact || {
+    echo "pre-commit: gitleaks found a potential secret in staged changes" >&2
+    exit 1
+  }
+else
+  echo "pre-commit: gitleaks not installed; secret scan SKIPPED (brew install gitleaks)" >&2
+fi
