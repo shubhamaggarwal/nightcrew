@@ -73,6 +73,25 @@ cmd_status() {
   fi
 }
 
+cmd_list() {
+  # Machine-wide sweep: every nightcrew process from ANY checkout, plus
+  # whoever holds this checkout's configured port.
+  local procs p holder
+  procs=$(pgrep -fl 'dashboard/server\.py|bin/poller\.sh' 2>/dev/null || true)
+  if [ -n "$procs" ]; then
+    printf '%s\n' "$procs"
+  else
+    echo "no nightcrew processes running"
+  fi
+  p=$(port)
+  holder=$(dash_pid)
+  if [ -n "$holder" ]; then
+    echo "port $p: held by pid $holder"
+  else
+    echo "port $p: free"
+  fi
+}
+
 cmd_install_launchd() {
   local dst="$HOME/Library/LaunchAgents" f out
   mkdir -p "$root/state" "$dst"
@@ -91,9 +110,10 @@ case "${1:-}" in
   start)           cmd_start ;;
   stop)            cmd_stop ;;
   status)          cmd_status ;;
+  list)            cmd_list ;;
   install-launchd) cmd_install_launchd ;;
   *)
-    echo "usage: nightcrew start|stop|status|install-launchd"
+    echo "usage: nightcrew start|stop|status|list|install-launchd"
     exit 2
     ;;
 esac

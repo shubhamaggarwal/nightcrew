@@ -27,7 +27,7 @@ COLUMNS = [
     ("Done", ["closed", "failed"]),
 ]
 ARTIFACTS = ["ticket.md", "requirements.md", "plan.md",
-             "execution-notes.md", "verification.md"]
+             "execution-notes.md", "verification.md", "failed.json"]
 BADGE_CLASS = {"new": "b-queue", "requirements": "b-queue",
                "awaiting-approval": "b-wait",
                "planning": "b-run", "executing": "b-run",
@@ -299,6 +299,10 @@ def card(t):
     if t["state"] == "failed" and t["failed"]:
         label = "failed · " + t["failed"].get("state", "?")
         h.append("<span class='badge b-fail'>%s</span>" % html.escape(label))
+        reason = t["failed"].get("reason", "")
+        if reason:
+            h.append("<div class='meta err'>%s</div>"
+                     % html.escape(reason[:120]))
     else:
         h.append(badge(t["state"]))
     h.append(progress_html(t))
@@ -353,10 +357,11 @@ def detail(tid, tab):
         h.append("<form class='inline' method='post' action='/approve/%s'>"
                  "<button class='pri'>Approve</button></form> " % tid)
     if t["state"] == "failed":
-        reason = (t["failed"] or {}).get("reason", "")
-        h.append("<p class='err'>failed in %s: %s</p>"
-                 % (html.escape((t["failed"] or {}).get("state", "?")),
-                    html.escape(reason)))
+        f = t["failed"] or {}
+        h.append("<p class='err'>failed in %s at %s: %s</p>"
+                 % (html.escape(f.get("state", "?")),
+                    html.escape(f.get("when", "?")),
+                    html.escape(f.get("reason", ""))))
         h.append("<form class='inline' method='post' action='/retry/%s'>"
                  "<button>Retry</button></form>" % tid)
     if t["pr"]:
