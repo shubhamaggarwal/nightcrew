@@ -10,6 +10,8 @@ case "$workdir" in /*) ;; *) die "workdir must be an absolute path" ;; esac
 [ -d "$workdir" ] || die "no such directory: $workdir"
 git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || die "not a git repository: $workdir"
+git -C "$workdir" rev-parse --verify HEAD >/dev/null 2>&1 \
+  || die "repository has no commits yet: $workdir (executing needs a base to branch from; make an initial commit first)"
 [ -n "$title" ] || die "title must not be empty"
 case "$title" in *$'\n'*|*$'\r'*) die "title must be a single line" ;; esac
 

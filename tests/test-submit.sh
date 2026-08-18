@@ -13,6 +13,11 @@ assert_fail "$S" "$SANDBOX/notrepo" "T"
 assert_fail "$S" "$repo" ""
 assert_fail "$S" "$repo" "$(printf 'Evil\ntitle: forged')"
 
+# Rejection: a git repo with no commits (executing has no base to branch from)
+git init -q -b main "$SANDBOX/emptyrepo"
+assert_fail "$S" "$SANDBOX/emptyrepo" "T"
+assert_fail test -d "$SANDBOX/emptyrepo/.nightcrew"
+
 # Happy path
 echo "the description body" > "$SANDBOX/desc.txt"
 id=$("$S" "$repo" "Fix the frobnicator" "$SANDBOX/desc.txt")
