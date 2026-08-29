@@ -49,7 +49,11 @@ make_repo() {
   git -C "$repo" add README.md
   git -C "$repo" commit -qm "Initial commit" --no-verify
   git -C "$repo" remote add origin "$bare"
-  git -C "$repo" push -qu origin main
+  # Fixture push to a sandbox-local bare origin. A globally-configured
+  # pre-push hook may refuse direct pushes to main; GIT_ALLOW_PROTECTED=1
+  # is that hook's sanctioned bypass for exactly this — unlike
+  # --no-verify, it skips only the branch guard, not the secret scan.
+  GIT_ALLOW_PROTECTED=1 git -C "$repo" push -qu origin main
   git -C "$repo" remote set-head origin main
   printf '%s\n' "$repo"
 }
