@@ -52,9 +52,9 @@ state a fresh bounded `claude -p` session.
 
 ## Where things are
 
-- Planning/design docs live in `.plans/` (gitignored, local-only). Do not
-  commit internal plans or specs; the public repo carries only README and
-  CLAUDE.md as documentation.
+- Planning/design docs live in `.plans/`, an untracked local-only
+  directory. Do not commit internal plans or specs; the public repo
+  carries only README and CLAUDE.md as documentation.
 - `state/` (registry, id counter, daemon logs, poller lock) is gitignored
   runtime state — never commit it, never depend on its contents in tests.
 - Prompt templates: `prompts/<state>.md`, one `OUTPUT FILE:` line each; the
