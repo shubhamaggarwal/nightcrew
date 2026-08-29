@@ -1,0 +1,83 @@
+# Nightcrew — PR title/body format guard
+#
+# Mirrors AM Buffer's .github/workflows/pr-format.yml. Enforces the same
+# commit format the local commit-msg hook requires, on the PR itself: title
+# <= 50 chars, no trailing period, no Conventional Commits prefix (feat:,
+# fix:, ...), capitalized first word; and a body carrying ## Summary,
+# ### What, ### Why, ## Test Plan, with no Co-Authored-By: trailer and no
+# "Generated with ... Claude" footer. This keeps PR descriptions in parity
+# with the commit format CLAUDE.md requires.
+#
+# WHAT THIS DOES NOT CHECK
+#   - The bash 3.2 invariant in CLAUDE.md (no declare -A, ${var,,},
+#     readarray, local -n): this job runs on ubuntu-latest, which ships
+#     bash 5, so a green run here proves nothing about bash 3.2
+#     compatibility. That stays a local macOS-only check.
+#   - Body wrap width: this repo's CLAUDE.md says 72 chars, the
+#     contributor's global CLAUDE.md says 80 — unresolved, so this mirrors
+#     AM Buffer and checks neither.
+#   - Nightcrew's own auto-generated PR bodies (bin/run-state.sh:174-183)
+#     build a body from <details> blocks plus "Ticket <id> via nightcrew.",
+#     with none of the four required sections. If nightcrew is ever pointed
+#     at this repository, its auto-created PRs will fail this check. That
+#     is a known interaction, not addressed here.
+#
+# Runs on `edited` too, so fixing the title or body re-triggers the check.
+# Plain ubuntu-latest (1x billing), no checkout, runs in seconds.
+
+name: PR format
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: pr-format-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-format:
+    name: PR title and body format
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate PR title and body
+        # Title and body are attacker-controlled text; pass them through
+        # the environment, never interpolate them into the script.
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -u
+          status=0
+          fail() { echo "::error::$1"; status=1; }
+
+          title=$(printf '%s' "$TITLE" | tr -d '\r')
+          body=$(printf '%s\n' "$BODY" | tr -d '\r')
+
+          if [ "${#title}" -gt 50 ]; then
+            fail "PR title is ${#title} chars; keep it to 50 or fewer (it becomes the squash commit subject)."
+          fi
+          if printf '%s' "$title" | grep -qE '\.$'; then
+            fail "Remove the trailing period from the PR title."
+          fi
+          if printf '%s' "$title" | grep -qE '^[a-z]+(\([^)]*\))?!?: '; then
+            fail "Drop the Conventional Commits prefix (feat:, fix:, docs: ...) from the PR title."
+          fi
+          if printf '%s' "$title" | grep -qE '^[a-z]'; then
+            fail "Capitalize the first word of the PR title."
+          fi
+
+          for sec in '## Summary' '### What' '### Why' '## Test Plan'; do
+            if ! printf '%s\n' "$body" | grep -qxF "$sec"; then
+              fail "PR body is missing required section: $sec"
+            fi
+          done
+          if printf '%s\n' "$body" | grep -qiE '^Co-Authored-By:'; then
+            fail "Remove the Co-Authored-By trailer from the PR body."
+          fi
+          if printf '%s\n' "$body" | grep -qiE 'Generated with .*Claude'; then
+            fail "Remove the Claude attribution footer from the PR body."
+          fi
+
+          exit "$status"

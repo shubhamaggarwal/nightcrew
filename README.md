@@ -70,14 +70,24 @@ tests/smoke-live.sh <repo> # one real ticket through to a PR; costs tokens
 
 ## Development workflow
 
-Secrets are scanned at three gates, all using the free, open-source
-[gitleaks](https://github.com/gitleaks/gitleaks):
+Changes land on `master` only through a pull request whose checks have
+passed — `master` is protected server-side (see **Branch protection**
+below) so this is enforced whether or not a contributor has the local hooks
+installed. The checks that gate a merge:
 
-1. **pre-commit** — staged changes are scanned before every commit
-2. **pre-push** — the full local history is scanned before anything leaves
-   your machine (the push is blocked if gitleaks is not installed)
-3. **CI** — `.github/workflows/secret-scan.yml` runs gitleaks on every push
-   and pull request
+1. **pre-commit** (local) — staged changes are scanned for secrets before
+   every commit, using the free, open-source
+   [gitleaks](https://github.com/gitleaks/gitleaks)
+2. **pre-push** (local) — the full local history is scanned for secrets
+   before anything leaves your machine (the push is blocked if gitleaks is
+   not installed)
+3. **`gitleaks`** (CI) — `.github/workflows/secret-scan.yml` runs gitleaks
+   on every push and pull request
+4. **`PR title and body format`** (CI) — `.github/workflows/pr-format.yml`
+   checks the PR title and body against the same rules as the commit-msg
+   hook (see below)
+5. **`Engine test suite (Linux)`** (CI) — `.github/workflows/checks.yml`
+   runs `bash tests/run.sh` on `ubuntu-latest`
 
 Enable the local hooks once per clone:
 
@@ -88,6 +98,38 @@ git config core.hooksPath .githooks
 
 The repo hooks chain to any globally-configured hooks dir, so a global
 `core.hooksPath` setup keeps working.
+
+### Branch protection
+
+`master` protection is server-side GitHub state; no file in this repo
+captures it, so it must be re-applied by hand if the repo is ever recreated.
+It was applied with:
+
+```bash
+gh api --method PUT repos/shubhamaggarwal/nightcrew/branches/master/protection \
+  --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": false,
+    "contexts": ["PR title and body format", "Engine test suite (Linux)", "gitleaks"]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 0,
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+JSON
+```
+
+`required_approving_review_count` is `0` because GitHub forbids
+self-approval and this is a single-maintainer repo; combined with
+`enforce_admins: true`, a nonzero value would leave `master` permanently
+unmergeable.
 
 ## License
 
