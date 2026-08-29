@@ -101,35 +101,26 @@ The repo hooks chain to any globally-configured hooks dir, so a global
 
 ### Branch protection
 
-`master` protection is server-side GitHub state; no file in this repo
-captures it, so it must be re-applied by hand if the repo is ever recreated.
-It was applied with:
+`master` is protected by a GitHub ruleset whose definition is committed at
+[.github/rulesets/master.json](.github/rulesets/master.json). GitHub does
+not read that file automatically — after recreating the repo, or after
+editing the file, apply it with:
 
 ```bash
-gh api --method PUT repos/shubhamaggarwal/nightcrew/branches/master/protection \
-  --input - <<'JSON'
-{
-  "required_status_checks": {
-    "strict": false,
-    "contexts": ["PR title and body format", "Engine test suite (Linux)", "gitleaks"]
-  },
-  "enforce_admins": true,
-  "required_pull_request_reviews": {
-    "required_approving_review_count": 0,
-    "dismiss_stale_reviews": false,
-    "require_code_owner_reviews": false
-  },
-  "restrictions": null,
-  "allow_force_pushes": false,
-  "allow_deletions": false
-}
-JSON
+gh api repos/shubhamaggarwal/nightcrew/rulesets --input .github/rulesets/master.json
 ```
 
-`required_approving_review_count` is `0` because GitHub forbids
-self-approval and this is a single-maintainer repo; combined with
-`enforce_admins: true`, a nonzero value would leave `master` permanently
-unmergeable.
+That creates a ruleset; to update the existing one instead (avoiding two
+layered rulesets), PUT the same file to `rulesets/<id>`, finding the id
+with `gh api repos/shubhamaggarwal/nightcrew/rulesets`.
+
+Two settings are deliberately conservative for a single-maintainer repo,
+where GitHub's ban on self-approval means no approval can ever arrive:
+`required_approving_review_count` is `0` and
+`require_extra_approval_for_unattributed_changes` is `false` — either one,
+raised on a repo with no second reviewer, leaves `master` permanently
+unmergeable. The empty `bypass_actors` list is also deliberate: the rules
+bind the repo admin too.
 
 ## License
 
