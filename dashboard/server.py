@@ -34,6 +34,22 @@ BADGE_CLASS = {"new": "b-queue", "requirements": "b-queue",
                "verifying": "b-run", "closing": "b-run",
                "closed": "b-done", "failed": "b-fail"}
 
+# Log renderer render budget: bounds so one page render never carries the
+# whole stream-json log (a session can write tens of MB across a run).
+LOG_TAIL_BYTES = 262144
+LOG_MAX_EVENTS = 400
+LOG_TEXT_CHARS = 4000
+LOG_TOOL_INPUT_CHARS = 1200
+LOG_RESULT_CHARS = 2000
+SYSTEM_NOTE_FIELDS = {
+    "thinking_tokens": ("estimated_tokens",),
+    "hook_started": ("hook_name",),
+    "hook_response": ("hook_name", "exit_code"),
+    "task_started": ("task_type", "description"),
+    "task_notification": ("status", "summary"),
+    "vcs_state_changed": ("kind", "branch"),
+}
+
 CSS = """
 :root{color-scheme:dark}
 *{box-sizing:border-box}
@@ -71,6 +87,8 @@ main{padding:22px 24px;max-width:1280px;margin:0 auto}
 .b-run{background:rgba(232,179,75,.1);color:#e8b34b;border-color:rgba(232,179,75,.3)}
 .b-done{background:rgba(95,211,154,.1);color:#5fd39a;border-color:rgba(95,211,154,.3)}
 .b-fail{background:rgba(255,122,122,.1);color:#ff7a7a;border-color:rgba(255,122,122,.3)}
+.b-tool{background:rgba(232,179,75,.1);color:#e8b34b;border-color:rgba(232,179,75,.3);
+  font-family:ui-monospace,Menlo,monospace}
 @keyframes ncpulse{0%,100%{opacity:1}50%{opacity:.4}}
 .b-run::before,.b-wait::before{content:'';display:inline-block;width:6px;height:6px;
   border-radius:50%;margin:0 6px 1px 0;vertical-align:middle}
@@ -95,6 +113,17 @@ button.pri:hover{background:#f2c56a;border-color:#f2c56a;color:#0b1020}
 form.inline{display:inline}
 pre{background:#0a0e1d;border:1px solid #1d2540;border-radius:12px;padding:14px;
   overflow-x:auto;font-size:12px;line-height:1.5;white-space:pre-wrap;color:#c7d0ec}
+.log-file{margin-bottom:22px}
+.log-file:last-child{margin-bottom:0}
+.ev{background:#0a0e1d;border:1px solid #1d2540;border-radius:8px;padding:8px 12px;margin-bottom:6px}
+.ev-text{color:#c7d0ec;white-space:pre-wrap}
+.ev-think,.ev-note{color:#6f7aa3;font-size:12px}
+.ev-tool summary{cursor:pointer}
+.ev-tool-desc{color:#c7d0ec;font-size:12.5px;margin-bottom:4px}
+.ev-res{border-left:3px solid #263156;padding-left:10px;color:#949cbc;white-space:pre-wrap}
+.ev-res.ev-err{border-left-color:#ff7a7a}
+.ev-cut{color:#6f7aa3;font-size:11px}
+.ev-init,.ev-result{color:#aeb7d8;font-size:12.5px}
 .tabs{margin:14px 0 6px}
 .tabs a{display:inline-block;font-size:12.5px;padding:4px 12px;margin:0 6px 6px 0;
   border-radius:999px;border:1px solid #263156;color:#949cbc;text-decoration:none;
@@ -338,6 +367,247 @@ def board():
     return page("Nightcrew", splash_html() + "".join(h), refresh=True)
 
 
+def clip(value, limit):
+    """The single escape choke point for log-derived data: everything the
+    renderer below shows on the page passes through here."""
+    s = str(value)
+    if len(s) <= limit:
+        return html.escape(s)
+    return (html.escape(s[:limit])
+            + "<span class='ev-cut'>&hellip; +%d chars</span>" % (len(s) - limit))
+
+
+def tail_lines(path):
+    """Read at most the last LOG_TAIL_BYTES of path as text lines.
+
+    A fixed byte-bounded tail off one snapshot is safe to read while the
+    file is still being appended to, and keeps huge logs off the page.
+    Returns (lines, skipped_bytes, size); ([], 0, 0) on any read error."""
+    try:
+        with open(path, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            start = max(0, size - LOG_TAIL_BYTES)
+            f.seek(start)
+            data = f.read()
+    except OSError:
+        return [], 0, 0
+    lines = data.decode("utf-8", "replace").splitlines()
+    if start > 0 and lines:
+        lines = lines[1:]  # drop the partial line the seek landed inside
+    return lines, start, size
+
+
+def log_events(lines):
+    """Parse tail_lines() output into classified event dicts, keeping only
+    the last LOG_MAX_EVENTS. Returns (events, dropped_count)."""
+    events = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+        except (ValueError, TypeError):
+            d = None
+        if not isinstance(d, dict):
+            events.append({"kind": "raw", "text": line})
+            continue
+        t = d.get("type")
+        if t == "system" and d.get("subtype") == "init":
+            d["kind"] = "init"
+        elif t == "result":
+            d["kind"] = "result"
+        elif t in ("assistant", "user"):
+            d["kind"] = t
+        else:
+            d["kind"] = "note"
+        events.append(d)
+    dropped = max(0, len(events) - LOG_MAX_EVENTS)
+    return events[-LOG_MAX_EVENTS:], dropped
+
+
+def build_tool_results(events):
+    """tool_use_id -> tool_result block, scanning every user event's
+    message.content up front so tool_use cards (rendered later) can show
+    their paired result inline even though it appears after them in time."""
+    results = {}
+    for e in events:
+        if e.get("kind") != "user":
+            continue
+        content = (e.get("message") or {}).get("content") or []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                tid = b.get("tool_use_id")
+                if tid:
+                    results[tid] = b
+    return results
+
+
+def ev_text(b):
+    return "<div class='ev ev-text'>%s</div>" % clip(b.get("text", ""), LOG_TEXT_CHARS)
+
+
+def ev_thinking(b):
+    # These blocks carry an empty thinking string plus a signature; the
+    # signature is never shown, so this is deliberately just a marker.
+    return "<div class='ev ev-think'>thinking</div>"
+
+
+def ev_tool_result(b):
+    content = b.get("content")
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif isinstance(item, dict):
+                parts.append("[%s]" % item.get("type", "?"))
+        text = "\n".join(parts)
+    else:
+        text = content
+    err = bool(b.get("is_error"))
+    cls = "ev ev-res ev-err" if err else "ev ev-res"
+    badge = "<span class='badge b-fail'>error</span> " if err else ""
+    return "<div class='%s'>%s%s</div>" % (cls, badge, clip(text, LOG_RESULT_CHARS))
+
+
+def ev_tool_use(b, results, used):
+    name = b.get("name", "?")
+    inp = b.get("input")
+    inp = inp if isinstance(inp, dict) else {}
+    if name == "Bash":
+        cmd = str(inp.get("command", ""))
+        desc = inp.get("description")
+        preview = desc if desc else (cmd.splitlines()[0] if cmd else "")
+        body = ("<div class='ev-tool-desc'>%s</div>" % clip(desc, 200)) if desc else ""
+        body += "<pre>%s</pre>" % clip(cmd, LOG_TOOL_INPUT_CHARS)
+    else:
+        preview = inp.get("file_path", "") if name in ("Read", "Write", "Edit") else ""
+        body = "<pre>%s</pre>" % clip(json.dumps(inp, indent=2), LOG_TOOL_INPUT_CHARS)
+    tid = b.get("id")
+    result_html = ""
+    if tid and tid in results:
+        result_html = ev_tool_result(results[tid])
+        used.add(tid)
+    return ("<details class='ev ev-tool'><summary>"
+            "<span class='badge b-tool'>%s</span> %s</summary>%s%s</details>"
+            % (clip(name, 60), clip(preview, 200), body, result_html))
+
+
+def ev_init(e):
+    tools = e.get("tools")
+    fields = [
+        ("model", e.get("model")),
+        ("cwd", e.get("cwd")),
+        ("permissionMode", e.get("permissionMode")),
+        ("version", e.get("claude_code_version")),
+        ("session", e.get("session_id")),
+        ("tools", len(tools) if isinstance(tools, list) else 0),
+    ]
+    parts = ["%s=%s" % (html.escape(k), clip(v, 200)) for k, v in fields
+              if v not in (None, "")]
+    return "<div class='ev ev-init'>session start &middot; %s</div>" % " &middot; ".join(parts)
+
+
+def ev_result(e):
+    is_error = bool(e.get("is_error"))
+    badge = ("<span class='badge b-fail'>fail</span>" if is_error
+              else "<span class='badge b-done'>done</span>")
+    dur = e.get("duration_ms")
+    if isinstance(dur, (int, float)):
+        mins, secs = divmod(int(dur) // 1000, 60)
+        dur_s = "%dm%02ds" % (mins, secs)
+    else:
+        dur_s = "?"
+    cost = e.get("total_cost_usd")
+    cost_s = "$%.4f" % cost if isinstance(cost, (int, float)) else "?"
+    parts = [badge,
+             "subtype=%s" % clip(e.get("subtype", "?"), 40),
+             "turns=%s" % clip(e.get("num_turns", "?"), 10),
+             "duration=%s" % html.escape(dur_s),
+             "cost=%s" % html.escape(cost_s)]
+    return "<div class='ev ev-result'>%s</div>" % " ".join(parts)
+
+
+def ev_note_run(name, count, first):
+    if count > 1:
+        return "<div class='ev ev-note'>%s &times;%d</div>" % (html.escape(name), count)
+    fields = SYSTEM_NOTE_FIELDS.get(name, ())
+    parts = ["%s=%s" % (html.escape(k), clip(first[k], 200))
+              for k in fields if k in first]
+    tail = (" " + " ".join(parts)) if parts else ""
+    return "<div class='ev ev-note'>%s%s</div>" % (html.escape(name), tail)
+
+
+def render_events(events):
+    results = build_tool_results(events)
+    used = set()
+    out = []
+    run_name, run_count, run_first = None, 0, None
+
+    def flush():
+        if run_name is not None:
+            out.append(ev_note_run(run_name, run_count, run_first))
+
+    for e in events:
+        kind = e.get("kind")
+        if kind == "note":
+            name = e.get("subtype") or e.get("type") or "note"
+            if name == run_name:
+                run_count += 1
+            else:
+                flush()
+                run_name, run_count, run_first = name, 1, e
+            continue
+        flush()
+        run_name, run_count, run_first = None, 0, None
+        if kind == "raw":
+            out.append("<div class='ev ev-text'>%s</div>" % clip(e.get("text", ""), LOG_TEXT_CHARS))
+        elif kind == "init":
+            out.append(ev_init(e))
+        elif kind == "result":
+            out.append(ev_result(e))
+        elif kind == "assistant":
+            for b in (e.get("message") or {}).get("content") or []:
+                if not isinstance(b, dict):
+                    continue
+                bt = b.get("type")
+                if bt == "text":
+                    out.append(ev_text(b))
+                elif bt == "thinking":
+                    out.append(ev_thinking(b))
+                elif bt == "tool_use":
+                    out.append(ev_tool_use(b, results, used))
+        elif kind == "user":
+            for b in (e.get("message") or {}).get("content") or []:
+                if not isinstance(b, dict) or b.get("type") != "tool_result":
+                    continue
+                tid = b.get("tool_use_id")
+                if tid in used:
+                    continue
+                out.append(ev_tool_result(b))
+                if tid:
+                    used.add(tid)
+    flush()
+    return "".join(out)
+
+
+def log_html(path):
+    lines, skipped, size = tail_lines(path)
+    h = ["<div class='log-file'><p class='path'>%s</p>" % html.escape(path)]
+    if size == 0:
+        h.append("<p class='meta'>(empty)</p></div>")
+        return "".join(h)
+    events, dropped = log_events(lines)
+    meta = ["%d bytes" % size]
+    if skipped > 0 or dropped > 0:
+        meta.append("showing last %d events of this log (earlier output not shown)"
+                     % len(events))
+    h.append("<p class='meta'>%s</p>" % " &middot; ".join(html.escape(m) for m in meta))
+    h.append(render_events(events))
+    h.append("</div>")
+    return "".join(h)
+
+
 def detail(tid, tab):
     t = find_ticket(tid)
     if t is None:
@@ -371,10 +641,7 @@ def detail(tid, tab):
         % ("on" if a == tab else "", tid, a, a) for a in tabs))
     if tab == "logs":
         for lg in logs:
-            p = os.path.join(t["dir"], "logs", lg)
-            with open(p, errors="replace") as f:
-                h.append("<p class='path'>%s</p><pre>%s</pre>"
-                         % (html.escape(p), html.escape(f.read()[-20000:])))
+            h.append(log_html(os.path.join(t["dir"], "logs", lg)))
     elif tab:
         p = os.path.join(t["dir"], tab)
         with open(p, errors="replace") as f:
