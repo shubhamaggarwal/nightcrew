@@ -1,0 +1,51 @@
+# Nightcrew — Linux CI for the engine test suite
+#
+# WHY LINUX, NOT macOS
+#   This repository is public today, so standard-runner Actions minutes are
+#   free, but minutes are billed with an OS multiplier: ubuntu-latest is
+#   1x, macos-* runners are 10x. Keep every job in this file on
+#   ubuntu-latest so nothing breaks if this repo is ever made private.
+#
+#   Do NOT add a macos-* runner to this workflow without the repo owner's
+#   explicit sign-off first.
+#
+# WHAT THIS COVERS
+#   bash tests/run.sh runs every tests/test-*.sh against
+#   tests/claude-stub.sh, so it needs no real `claude` binary and no `gh`
+#   auth, and costs zero tokens. Its external dependencies are bash, git
+#   >= 2.28 (for `git init -b` in tests/helpers.sh:make_repo), python3, and
+#   mktemp — all present on ubuntu-latest.
+#
+# WHAT THIS DOES NOT COVER
+#   ubuntu-latest ships bash 5, so a green run here does NOT prove the
+#   bash 3.2 invariant in CLAUDE.md is respected (no declare -A,
+#   ${var,,}, readarray, local -n) — that stays a local macOS-only check.
+#   The dashboard (dashboard/server.py) has no bash tests by design; it is
+#   verified with a curl checklist, locally, not here. Repo hooks
+#   (.githooks) are deliberately NOT enabled in this job — see below.
+
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Engine test suite (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: bash tests/run.sh
+        run: bash tests/run.sh
