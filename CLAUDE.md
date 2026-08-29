@@ -30,8 +30,10 @@ state a fresh bounded `claude -p` session.
   tokens). Keep it green; add checks for every engine change.
 - Tests sandbox themselves via `make_sandbox` (NC_ROOT + CLAUDE_BIN env
   overrides) and must never touch the real `state/` or any real repo.
-- Fixture commits inside test sandboxes use `--no-verify`. Real project
-  commits NEVER do.
+- Fixture commits inside test sandboxes use `--no-verify`; the fixture
+  push in `make_repo` uses `GIT_ALLOW_PROTECTED=1` (bypasses only a global
+  hook's protected-branch guard, never the secret scan). Real project
+  commits and pushes NEVER bypass anything.
 - The dashboard has no bash tests by design: verify it with the curl
   checklist pattern (start server, curl routes, kill server) plus a browser
   check for visual changes.
